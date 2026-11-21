@@ -6,7 +6,7 @@ import re
 import html
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import whisper
+from groq import Groq
 from flask import send_file
 from tts_engine import synthesize_wav, tts_available
 
@@ -24,20 +24,24 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 def clean_text_for_speech(text):
-    """Remove Markdown formatting before generating spoken audio."""
-    if not text:
+    """Remove Markdown markup before speaking, without changing displayed answers."""
+    if not isinstance(text, str):
         return ""
-    text = html.unescape(str(text))
-    text = re.sub(r"```[\s\S]*?```", " Code example omitted. ", text)
+
+    text = html.unescape(text)
+    # Remove code fences but preserve their contents.
+    text = re.sub(r"```(?:[^\n]*)\n?", "", text)
+    # Markdown images and links: speak their descriptive labels, not URLs.
     text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
-    text = re.sub(r"(?m)^\s*(?:[-*+] |\d+[.)] )", "", text)
     text = re.sub(r"(?m)^\s*>\s?", "", text)
+    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    text = re.sub(r"(?m)^\s*\d+[.)]\s+", "", text)
+    text = re.sub(r"(?m)^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$", "", text)
     text = re.sub(r"[*_`~#]", "", text)
     text = text.replace("|", ", ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", text).strip()
 
 
 # ==========================================
@@ -168,21 +172,22 @@ init_db()
 
 
 # ==========================================
-# LOAD WHISPER MODEL
+# CLOUD SPEECH-TO-TEXT (GROQ WHISPER)
 # ==========================================
 
-print("Loading Whisper model...")
-
-model = whisper.load_model("tiny")
-
-print("Whisper model loaded successfully!")
+# Created lazily when an audio request arrives; no local Whisper model is loaded.
+def get_groq_client():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not configured.")
+    return Groq(api_key=api_key)
 
 
 # ==========================================
 # HTML INTERFACE
 # ==========================================
 
-HTML = r"""
+HTML = """
 <!DOCTYPE html>
 <html lang="en">
 
@@ -878,6 +883,24 @@ async function uploadRecording() {
 // TEXT TO SPEECH
 // ==========================================
 
+function cleanTextForSpeech(text) {
+    if (!text) return "";
+    return String(text)
+        .replace(/```(?:[^\\n]*)\\n?/g, "")
+        .replace(/!\\[([^\\]]*)\\]\\([^)]+\\)/g, "$1")
+        .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, "$1")
+        .replace(/^\\s{0,3}#{1,6}\\s+/gm, "")
+        .replace(/^\\s*>\\s?/gm, "")
+        .replace(/^\\s*[-*+]\\s+/gm, "")
+        .replace(/^\\s*\\d+[.)]\\s+/gm, "")
+        .replace(/[*_`~#]/g, "")
+        .replace(/\\|/g, ", ")
+        .replace(/\\s+/g, " ")
+        .trim();
+}
+
+
+
 let currentSpeech = null;
 let currentAudio = null;
 let currentAudioUrl = null;
@@ -886,64 +909,42 @@ function cleanupAudio() {
     if (currentAudio) { currentAudio.pause(); currentAudio = null; }
     if (currentAudioUrl) { URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
 }
-function cleanTextForSpeech(text) {
-    return String(text || "")
-        .replace(/```[\s\S]*?```/g, " Code example omitted. ")
-        .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-        .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-        .replace(/^\s*(?:[-*+] |\d+[.)] )/gm, "")
-        .replace(/^\s*>\s?/gm, "")
-        .replace(/[*_`~#]/g, "")
-        .replace(/\|/g, ", ")
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
 function browserSpeak(text) {
-    const status = document.getElementById("speechStatus");
     if (!("speechSynthesis" in window)) {
-        status.innerText = "Browser speech is not supported.";
+        document.getElementById("speechStatus").innerText = "No speech engine available.";
         return;
     }
-
-    const utterance = new SpeechSynthesisUtterance(cleanTextForSpeech(text));
-    utterance.lang = "en-US";
-    utterance.rate = 0.9;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find(v =>
-        v.lang.toLowerCase().startsWith("en") && /natural|online/i.test(v.name)
-    ) || voices.find(v => v.lang.toLowerCase() === "en-us")
-      || voices.find(v => v.lang.toLowerCase().startsWith("en"));
-    if (preferredVoice) utterance.voice = preferredVoice;
-
-    currentSpeech = utterance;
-    utterance.onstart = () => { status.innerText = "Speaking using browser voice..."; };
-    utterance.onend = () => {
-        status.innerText = "Speech finished.";
-        currentSpeech = null;
-    };
-    utterance.onerror = (event) => {
-        if (event.error !== "canceled" && event.error !== "interrupted") {
-            status.innerText = "Browser speech failed: " + event.error;
-        }
-        currentSpeech = null;
-    };
-    window.speechSynthesis.speak(utterance);
+    currentSpeech = new SpeechSynthesisUtterance(text);
+    currentSpeech.lang = "en-US";
+    currentSpeech.onend = () => document.getElementById("speechStatus").innerText = "Speech finished.";
+    window.speechSynthesis.speak(currentSpeech);
 }
-
-function speakAnswer(elementId) {
-    const element = document.getElementById(elementId);
-    if (!element) return;
-    const text = cleanTextForSpeech(element.innerText);
+async function speakAnswer(elementId) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    const text = cleanTextForSpeech(el.innerText);
     if (!text) return;
     stopSpeaking();
-    browserSpeak(text);
+    const status = document.getElementById("speechStatus");
+    status.innerText = "Generating spoken answer...";
+    try {
+        const response = await fetch("/api/tts", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({text})
+        });
+        if (!response.ok) throw new Error("pyttsx3 speech unavailable");
+        const blob = await response.blob();
+        currentAudioUrl = URL.createObjectURL(blob);
+        currentAudio = new Audio(currentAudioUrl);
+        currentAudio.onended = () => { status.innerText = "Speech finished."; cleanupAudio(); };
+        await currentAudio.play();
+        status.innerText = "Speaking using pyttsx3...";
+    } catch (error) {
+        cleanupAudio();
+        status.innerText = "Using browser speech fallback.";
+        browserSpeak(text);
+    }
 }
-
 function pauseSpeaking() {
     if (currentAudio) currentAudio.pause();
     else if ("speechSynthesis" in window) window.speechSynthesis.pause();
@@ -990,13 +991,15 @@ def process_audio(audio, conversation_id=""):
 
         audio.save(filepath)
 
-        result = model.transcribe(
-            filepath,
-            language="en",
-            fp16=False
-        )
+        with open(filepath, "rb") as audio_file:
+            result = get_groq_client().audio.transcriptions.create(
+                file=(os.path.basename(filepath), audio_file),
+                model="whisper-large-v3-turbo",
+                language="en",
+                response_format="json",
+            )
 
-        transcription = result["text"].strip()
+        transcription = result.text.strip()
 
         if not transcription:
             raise ValueError("No speech detected.")
@@ -1125,7 +1128,7 @@ def transcribe():
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "whisper_loaded": model is not None, "tts_available": tts_available()})
+    return jsonify({"status": "ok", "transcription_provider": "groq", "tts_available": tts_available()})
 
 @app.post("/api/tts")
 def text_to_speech():
@@ -1136,6 +1139,8 @@ def text_to_speech():
     if len(text) > 1200:
         return jsonify({"error": "Maximum speech length is 1200 characters."}), 400
     text = clean_text_for_speech(text)
+    if not text:
+        return jsonify({"error": "No speakable text found."}), 400
     try:
         audio = synthesize_wav(text)
         return send_file(audio, mimetype="audio/wav", as_attachment=False, download_name="answer.wav")
@@ -1159,7 +1164,7 @@ def file_too_large(error):
 if __name__ == "__main__":
 
     app.run(
-        host=os.getenv("HOST", "127.0.0.1"),
+        host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "5000")),
         debug=os.getenv("FLASK_DEBUG", "false").lower() == "true",
         use_reloader=False
