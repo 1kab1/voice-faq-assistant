@@ -1,0 +1,41 @@
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Environment variables and API keys
+.env
+.env.*
+!.env.example
+
+# SQLite databases
+conversations.db
+*.db
+*.sqlite3
+
+# Uploaded audio
+uploads/*
+!uploads/.gitkeep
+
+# Local backups
+app_working_backup.txt
+app_old_backup.txt
+
+# IDE and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local backup
+app_broken_backup.txt
+
+# Generated audio test files
+test_audio.json
+test_audio.m4a
+test_audio.srt
+test_audio.tsv
+test_audio.txt
+test_audio.vtt
