@@ -1,4 +1,4 @@
-# Voice-Based FAQ Assistant — CV-aligned hybrid edition
+# Voice-Based FAQ Assistant
 
 **Stack:** Python, Flask, Whisper (STT), keyword FAQ matching, pyttsx3 (server-side WAV TTS), GroqCloud with optional Ollama fallback, SQLite history, Docker, Linux, systemd, UFW, Monit.
 
