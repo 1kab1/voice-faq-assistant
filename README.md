@@ -11,6 +11,12 @@
 
 [🎬 Watch the Full Demo with Sound](screenshots/voice-assistant-demo.mp4)
 
+## 🌐 Live Demo
+
+🚀 **Try the Voice-Based FAQ Assistant:**
+
+https://voice-faq-assistant.onrender.com
+
 ## How answers work
 1. Text, uploaded audio, or microphone recording arrives at Flask. Whisper transcribes audio.
 2. `answer_engine.py` normalizes the question and searches `knowledge_base.py` FAQ keywords first.
