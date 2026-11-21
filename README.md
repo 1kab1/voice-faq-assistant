@@ -3,7 +3,7 @@
 **Stack:** Python, Flask, Whisper (STT), keyword FAQ matching, pyttsx3 (server-side WAV TTS), GroqCloud with optional Ollama fallback, SQLite history, Docker, Linux, systemd, UFW, Monit.
 ## Application Screenshot
 
-![Voice-Based FAQ Assistant Demo](screenshots/voice-assistant-demo.png)
+![Voice-Based FAQ Assistant](screenshots/voice-assistant-full-page.jpeg)
 
 ## How answers work
 1. Text, uploaded audio, or microphone recording arrives at Flask. Whisper transcribes audio.
